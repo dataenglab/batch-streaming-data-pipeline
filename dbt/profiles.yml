@@ -1,0 +1,12 @@
+de1:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: postgres-src
+      port: 5432
+      user: postgres
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: mydb
+      schema: public
+      threads: 1

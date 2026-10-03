@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Airflow
+logs/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# Large and local JARs
+spark/jars/aws-java-sdk-bundle-*.jar
+
+# Jupyter
+notebooks/.ipynb_checkpoints/
+
+# Environment and secrets
+.env
+.env.*
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backup files
+*.bak

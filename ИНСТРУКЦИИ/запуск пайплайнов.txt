@@ -1,0 +1,40 @@
+ПЕРЕД ЗАПУСКОМ ЛЮБОГО ПАЙПЛАЙНА УБЕДИСЬ, ЧТО СКАЧАЛ JAR:
+https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-java-sdk-bundle-1.12.526.jar
+Положи его в spark/jars/
+
+===============================================
+
+ВЕТКА 1. ПАКЕТНАЯ ЗАГРУЗКА (Postgres -> MinIO -> ClickHouse)
+
+Шаг 1. Создай таблицу в Postgres (если ещё нет):
+  docker exec postgres-src psql -U postgres -d mydb -c "DROP TABLE IF EXISTS orders; CREATE TABLE orders (id SERIAL PRIMARY KEY, name VARCHAR(50), amount FLOAT);"
+
+Добавь строку (если нужно, id генерируется автоматически):
+  docker exec postgres-src psql -U postgres -d mydb -c "INSERT INTO orders (name, amount) VALUES ('test', 100.5);"
+
+Шаг 2. Запусти transfer из Postgres в MinIO (каждый раз, когда хочешь забрать новую порцию данных из Postgres):
+  docker exec -it spark spark-submit --jars /opt/spark/jars/postgresql-42.6.0.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/pg_to_minio.py
+
+Шаг 3. Запусти transfer из MinIO в ClickHouse (каждый раз, когда хочешь перекинуть данные из MinIO в ClickHouse):
+  docker exec -it spark spark-submit --jars /opt/spark/jars/clickhouse-jdbc-0.5.0-all.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/minio_to_clickhouse.py
+
+===============================================
+
+ВЕТКА 2. STREAMING (Postgres CDC -> Kafka -> MinIO -> ClickHouse)
+
+Предварительно: создай топик в Kafka UI (localhost:8082): pg.public.orders (1 партиция, 1 реплика)
+
+Шаг 1. Активируй Debezium connector:
+  Invoke-RestMethod -Method Post -Uri http://localhost:8083/connectors/ -ContentType "application/json" -InFile .\pg-connector.json
+
+Шаг 2. Запусти streaming в MinIO (запускаешь один раз, работает в бесконечном цикле):
+  docker exec -it spark spark-submit --jars /opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/kafka_to_minio.py
+
+Шаг 3. Данные из MinIO в ClickHouse (тот же скрипт, что и в ветке 1):
+  docker exec -it spark spark-submit --jars /opt/spark/jars/clickhouse-jdbc-0.5.0-all.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/minio_to_clickhouse.py
+
+===============================================
+
+ОТДЕЛЬНЫЙ СКРИПТ (не streaming):
+  python scripts/kafka_producer.py
+Генерирует данные в топик sensor_metrics (нужно создать через Kafka UI).
