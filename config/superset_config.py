@@ -1,1 +1,3 @@
-SECRET_KEY = 'KF3VkbO+ZKKMEUzJ3AxQ+F5nmD+80yRxpviYwONP1crTYMhVgxQQOIIQ'
+import os
+
+SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]

@@ -283,7 +283,7 @@ services:
     environment:
       SUPERSET_ENV: development
       SUPERSET_LOAD_EXAMPLES: "no"
-      SUPERSET_SECRET_KEY: supersecret
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Set SUPERSET_SECRET_KEY in .env}
     depends_on:
       - clickhouse
     networks:
