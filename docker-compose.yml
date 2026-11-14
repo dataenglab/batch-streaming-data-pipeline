@@ -299,6 +299,8 @@ services:
       dockerfile: Dockerfile.dbt
     working_dir: /usr/app
     command: ["sleep", "infinity"]
+    environment:
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - ./dbt:/usr/app
       - ./dbt/profiles.yml:/root/.dbt/profiles.yml

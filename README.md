@@ -360,8 +360,15 @@ The project requires:
 Clone the repository:
 
 ```bash
-git clone https://github.com/<YOUR_USERNAME>/batch-streaming-data-pipeline.git
+git clone https://github.com/dataenglab/batch-streaming-data-pipeline.git
 cd batch-streaming-data-pipeline
+```
+
+Download the AWS SDK bundle JAR (~300 MB, not stored in Git) into `spark/jars/` — it is required to build the Spark and Airflow images:
+
+```bash
+curl -L -o spark/jars/aws-java-sdk-bundle-1.12.526.jar \
+  https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-java-sdk-bundle-1.12.526.jar
 ```
 
 Create the local environment file:
@@ -401,6 +408,21 @@ View logs:
 ```bash
 docker compose logs -f
 ```
+
+## Service URLs
+
+| Service | URL | Credentials |
+| --- | --- | --- |
+| Airflow | http://localhost:8080 | admin / admin |
+| Kafka UI | http://localhost:8082 | — |
+| Kafka Connect (Debezium) REST | http://localhost:8083 | — |
+| MinIO Console | http://localhost:9001 | minio / minio123 |
+| Spark Master UI | http://localhost:8081 | — |
+| ClickHouse HTTP | http://localhost:8123 | default / (empty) |
+| Superset | http://localhost:8088 | admin / admin (see instructions) |
+| Jupyter | http://localhost:8889 | token: admin |
+
+Step-by-step instructions for running the pipelines, registering the Debezium connector and activating Superset are in [`Training_instruction.md`](Training_instruction.md) and the [`ИНСТРУКЦИИ/`](ИНСТРУКЦИИ/) folder.
 
 ---
 

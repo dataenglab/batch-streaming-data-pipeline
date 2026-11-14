@@ -22,7 +22,7 @@ df_str = df.selectExpr("CAST(value AS STRING)")
 # --- 4. Запись в MinIO ---
 query_minio = df_str.writeStream \
     .format("parquet") \
-    .option("checkpointLocation", "/tmp/checkpoint") \
+    .option("checkpointLocation", "s3a://bucket/checkpoints/kafka_orders") \
     .option("path", "s3a://bucket/kafka_output") \
     .start()
 

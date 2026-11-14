@@ -11,7 +11,7 @@ with DAG(
 
     generate_raw_data = BashOperator(
         task_id="generate_raw_data",
-        bash_command="docker exec jupyter python /home/jovyan/scripts/generate_raw_data.py",
+        bash_command="docker exec spark python /home/jovyan/scripts/generate_raw_data.py",
     )
 
     run_dbt = BashOperator(

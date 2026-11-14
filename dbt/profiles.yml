@@ -6,7 +6,7 @@ de1:
       host: postgres-src
       port: 5432
       user: postgres
-      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'postgres') }}"
       dbname: mydb
       schema: public
       threads: 1

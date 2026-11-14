@@ -7,3 +7,5 @@ clickhouse-driver==0.2.6
 apache-airflow-providers-apache-spark==4.3.0
 minio==7.1.0
 boto3==1.28.57
+faker==19.6.2
+psycopg2-binary==2.9.9

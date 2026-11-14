@@ -4,13 +4,11 @@
 
 docker exec -it superset bash
 
-создаем пользователя (админа)
-
-superset fab create-admin --username admin --firstname Admin --lastname User --email admin@admin.com --password admin
-
-инициализируем бд и миграции
+инициализируем бд (миграции), создаем админа, затем инициализируем роли
+порядок важен: на пустой базе create-admin без db upgrade упадет
 
 superset db upgrade
+superset fab create-admin --username admin --firstname Admin --lastname User --email admin@admin.com --password admin
 superset init
 
 выходим

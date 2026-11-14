@@ -1,5 +1,11 @@
 запустить в терминале (нужно для работы kafka_to_minio.py)
 
+PowerShell:
 Invoke-RestMethod -Method Post -Uri http://localhost:8083/connectors/ -ContentType "application/json" -InFile .\pg-connector.json
+
+Git Bash / Linux / macOS:
+curl -X POST -H "Content-Type: application/json" --data @pg-connector.json http://localhost:8083/connectors/
+
+Таблица orders в postgres-src должна существовать до регистрации коннектора.
 
 после запуска через пару секунд в kafka появится новый топик pg.public.orders, к которому уже подключится spark

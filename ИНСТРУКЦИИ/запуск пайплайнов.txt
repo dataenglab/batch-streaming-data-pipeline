@@ -22,19 +22,24 @@ https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-ja
 
 ВЕТКА 2. STREAMING (Postgres CDC -> Kafka -> MinIO -> ClickHouse)
 
-Предварительно: создай топик в Kafka UI (localhost:8082): pg.public.orders (1 партиция, 1 реплика)
+Предварительно: таблица orders должна существовать (см. ВЕТКА 1, Шаг 1).
+Топик pg.public.orders Debezium создаст сам после регистрации коннектора.
 
 Шаг 1. Активируй Debezium connector:
+  PowerShell:
   Invoke-RestMethod -Method Post -Uri http://localhost:8083/connectors/ -ContentType "application/json" -InFile .\pg-connector.json
+  Git Bash / Linux / macOS:
+  curl -X POST -H "Content-Type: application/json" --data @pg-connector.json http://localhost:8083/connectors/
 
 Шаг 2. Запусти streaming в MinIO (запускаешь один раз, работает в бесконечном цикле):
   docker exec -it spark spark-submit --jars /opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/kafka_to_minio.py
 
-Шаг 3. Данные из MinIO в ClickHouse (тот же скрипт, что и в ветке 1):
-  docker exec -it spark spark-submit --jars /opt/spark/jars/clickhouse-jdbc-0.5.0-all.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/minio_to_clickhouse.py
+Шаг 3. Данные из MinIO (kafka_output) в ClickHouse (таблица kafka_orders):
+  docker exec -it spark spark-submit --jars /opt/spark/jars/clickhouse-jdbc-0.5.0-all.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/minio_to_clickhouse_kafka.py
 
 ===============================================
 
-ОТДЕЛЬНЫЙ СКРИПТ (не streaming):
+ОТДЕЛЬНЫЙ СКРИПТ (не streaming), запускается на твоём компьютере:
+  pip install kafka-python
   python scripts/kafka_producer.py
 Генерирует данные в топик sensor_metrics (нужно создать через Kafka UI).
