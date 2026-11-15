@@ -43,7 +43,7 @@ The project combines PostgreSQL, Debezium, Apache Kafka, MinIO, Apache Spark, Cl
 
    Orchestrated transformation flow (Airflow DAG raw_to_mart_pipeline):
 
-   generate_raw_data.py ─► PostgreSQL raw_orders ─► dbt stg_orders ─► dbt mart_daily_sales ─► Superset
+   generate_raw_data.py ─► PostgreSQL raw_orders ─► dbt stg_orders ─► dbt mart_daily_sales ─► dbt test ─► Superset
    (dirty data: duplicates,     (view: cleaning,        (table: daily sales
     mixed date formats)          dedup, type casting)    by category)
 ```
@@ -79,10 +79,10 @@ PostgreSQL → Debezium → Kafka → Spark Structured Streaming → MinIO (raw 
 
 ### Orchestrated transformations (Airflow + dbt)
 
-An Airflow DAG generates intentionally dirty raw data in PostgreSQL and runs dbt models on top of it: a staging view that cleans, casts and deduplicates, and a mart table with daily sales by category, visualized in Superset.
+An Airflow DAG generates intentionally dirty raw data in PostgreSQL and runs dbt models on top of it: a staging view that cleans, casts and deduplicates, and a mart table with daily sales by category, visualized in Superset. dbt tests check keys, accepted values and the grain of the mart after every run.
 
 ```text
-Airflow: generate_raw_data → PostgreSQL raw_orders → dbt stg_orders → dbt mart_daily_sales → Superset
+Airflow: generate_raw_data → PostgreSQL raw_orders → dbt run (stg_orders, mart_daily_sales) → dbt test → Superset
 ```
 
 This allows the project to demonstrate batch ETL, event-driven CDC and ELT with dbt.
@@ -95,7 +95,7 @@ This allows the project to demonstrate batch ETL, event-driven CDC and ELT with 
 | ------------------- | ----------------------------------------------- |
 | **Python**          | Data extraction, producers and pipeline scripts |
 | **Apache Airflow**  | Workflow orchestration                          |
-| **Apache Spark**    | Distributed data processing                     |
+| **Apache Spark**    | Batch and Structured Streaming jobs (local mode)|
 | **Apache Kafka**    | Event streaming and message transport           |
 | **Debezium**        | Change Data Capture from PostgreSQL             |
 | **PostgreSQL**      | Source relational database                      |
@@ -118,16 +118,15 @@ This project covers several practical Data Engineering concepts:
 * Change Data Capture (CDC)
 * Event-driven architecture
 * Data lake / object storage
-* Analytical databases
-* Distributed processing with Spark
-* Workflow orchestration
-* SQL transformations
+* Analytical databases (ClickHouse MergeTree / ReplacingMergeTree)
+* Spark batch jobs and Spark Structured Streaming (local mode)
+* Idempotent loads (full snapshot reload, versioned upserts by LSN)
+* Workflow orchestration with Airflow (DAG dependencies, retries, pools)
+* SQL transformations with dbt (staging → mart)
+* Data quality tests with dbt (generic and singular tests)
 * Data marts
-* Dockerized data infrastructure
-* Kafka producers and consumers
-* PostgreSQL integration
+* Dockerized data infrastructure (Compose profiles)
 * S3-compatible storage
-* Monitoring and pipeline execution
 
 ---
 
@@ -185,16 +184,16 @@ The project uses Spark and S3A-compatible configuration to interact with MinIO.
 
 ### Apache Spark
 
-Spark is used for distributed data processing.
+Spark runs batch jobs and a Structured Streaming job. Jobs are submitted inside the `spark` container in **local mode** (`local[*]`): there is no separate Spark cluster, which is enough for the data volumes of this project and fits an 8 GB laptop. The Spark UI of a running job is available at http://localhost:4040.
 
-The project includes Spark configuration and required connectors/JARs for integration with:
+The Spark image includes the connectors/JARs for integration with:
 
 * Kafka
 * PostgreSQL
 * MinIO / S3
 * ClickHouse
 
-Spark is used where distributed processing and integration with the data platform are required.
+All dependencies live in `spark/jars/` and are copied into `$SPARK_HOME/jars` at build time (no `--packages`, see [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)).
 
 ---
 
@@ -212,18 +211,10 @@ This separates the analytical workload from the transactional PostgreSQL source.
 
 dbt is used for SQL-based transformations of the raw data in PostgreSQL (`raw_orders`). The ClickHouse adapter is installed, so the models can be moved to ClickHouse later.
 
-The project contains:
-
-```text
-dbt/
-├── dbt_project.yml
-├── profiles.yml
-└── models/
-    ├── staging/
-    │   └── stg_orders.sql
-    └── marts/
-        └── mart_daily_sales.sql
-```
+* `sources.yml` — the raw table `raw_orders` declared as a dbt source (`{{ source('raw', 'raw_orders') }}`)
+* `stg_orders` (view) — type casting, normalization of three date formats, deduplication by `order_id`
+* `mart_daily_sales` (table) — daily sales by category
+* tests — `unique` / `not_null` / `accepted_values` in `schema.yml` and singular tests in `dbt/tests/` (grain of the mart, positive amounts); `dbt test` runs as a task in the Airflow DAG
 
 The transformation layer follows a staging → mart approach:
 
@@ -248,8 +239,12 @@ The DAG `raw_to_mart_pipeline` runs daily:
 ```text
 generate_raw_data (docker exec spark python ...)
         ↓
-run_dbt (docker exec dbt dbt run)
+dbt_run  (docker exec dbt dbt run)
+        ↓
+dbt_test (docker exec dbt dbt test)
 ```
+
+Two more DAGs load the batch and CDC data into ClickHouse — see [Orchestration](#orchestration).
 
 Tasks call other containers through the Docker socket mounted into the scheduler.
 
@@ -291,17 +286,22 @@ batch-streaming-data-pipeline/
 ├── dags/
 │   ├── batch_pg_to_clickhouse.py
 │   ├── cdc_minio_to_clickhouse.py
-│   ├── raw_to_mart_pipeline.py
-│   └── test_dag.py
+│   └── raw_to_mart_pipeline.py
 │
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles.yml
-│   └── models/
-│       ├── staging/
-│       │   └── stg_orders.sql
-│       └── marts/
-│           └── mart_daily_sales.sql
+│   ├── models/
+│   │   ├── staging/
+│   │   │   ├── sources.yml
+│   │   │   ├── schema.yml
+│   │   │   └── stg_orders.sql
+│   │   └── marts/
+│   │       ├── schema.yml
+│   │       └── mart_daily_sales.sql
+│   └── tests/
+│       ├── assert_amount_positive.sql
+│       └── assert_mart_daily_sales_grain.sql
 │
 ├── scripts/
 │   ├── generate_raw_data.py
@@ -317,12 +317,9 @@ batch-streaming-data-pipeline/
 │   ├── Dockerfile.spark
 │   └── requirements.txt
 │
-├── config/
-│   ├── jupyter_notebook_config.py
-│   └── superset_config.py
-│
 ├── docs/
-│   └── TROUBLESHOOTING.md
+│   ├── TROUBLESHOOTING.md
+│   └── superset_dashboard.png
 │
 ├── ИНСТРУКЦИИ/
 │   ├── активация superset.txt
@@ -364,7 +361,7 @@ curl -L -o spark/jars/aws-java-sdk-bundle-1.12.526.jar \
   https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-java-sdk-bundle-1.12.526.jar
 ```
 
-Create the local environment file (excluded from Git):
+Create the local environment file (excluded from Git) and fill in `SUPERSET_SECRET_KEY` and `AIRFLOW_FERNET_KEY` (the generation command is in `.env.example`):
 
 ```bash
 cp .env.example .env
@@ -404,7 +401,7 @@ docker compose ps
 | Kafka UI | http://localhost:8082 | — |
 | Kafka Connect (Debezium) REST | http://localhost:8083 | — |
 | MinIO Console | http://localhost:9001 | minio / minio123 |
-| Spark Master UI | http://localhost:8081 | — |
+| Spark UI (while a job is running) | http://localhost:4040 (second job: 4041) | — |
 | ClickHouse HTTP | http://localhost:8123 | default / (empty) |
 | Superset | http://localhost:8088 | admin / admin (see instructions) |
 | Jupyter | http://localhost:8889 | token: admin |
@@ -481,7 +478,7 @@ BI / Analytics
 
 | DAG | Schedule | Tasks |
 | --- | --- | --- |
-| `raw_to_mart_pipeline` | daily | `generate_raw_data` → `run_dbt` (Postgres raw → staging → mart) |
+| `raw_to_mart_pipeline` | daily | `generate_raw_data` → `dbt_run` → `dbt_test` (Postgres raw → staging → mart → data quality tests) |
 | `batch_pg_to_clickhouse` | daily | `pg_to_minio` → `minio_to_clickhouse` |
 | `cdc_minio_to_clickhouse` | hourly | `minio_to_clickhouse_cdc` → `check_current_state` |
 
@@ -571,8 +568,9 @@ Further improvements can include:
 
 * running the CDC stream as a supervised service instead of a manual `spark-submit`
 * dbt models on top of ClickHouse
-* automated data quality checks
-* additional dbt tests
+* more dbt tests (relationships, source freshness) and data quality checks on the ClickHouse side
+* a multi-node Spark cluster instead of local mode
+* pinned Docker image versions instead of `:latest`
 * incremental dbt models
 * schema evolution handling
 * monitoring and alerting

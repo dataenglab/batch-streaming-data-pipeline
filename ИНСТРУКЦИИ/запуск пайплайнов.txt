@@ -2,7 +2,7 @@
 
 Перед первым запуском:
   - скачан aws-java-sdk-bundle-1.12.526.jar в spark/jars/ (см. Training_instruction.md)
-  - создан .env (cp .env.example .env)
+  - создан .env (cp .env.example .env) и заполнены SUPERSET_SECRET_KEY и AIRFLOW_FERNET_KEY
   - Git Bash на Windows: выполни один раз
       echo 'export MSYS_NO_PATHCONV=1' >> ~/.bashrc
     и открой терминал заново. Иначе Git Bash искажает пути вида /home/jovyan/...
@@ -10,6 +10,8 @@
 
 Все команды выполняются в корневой папке проекта (там, где docker-compose.yml).
 Spark сам подхватывает JAR-файлы и настройки MinIO из образа, поэтому --jars и --conf не нужны.
+Spark работает в local mode внутри контейнера spark; UI запущенного job'а — http://localhost:4040
+(второй одновременный job — 4041).
 
 ===============================================
 
@@ -43,6 +45,7 @@ Spark сам подхватывает JAR-файлы и настройки MinIO
   curl -X POST -H "Content-Type: application/json" --data @pg-connector.json http://localhost:8083/connectors/
   curl http://localhost:8083/connectors/pg-connector/status
   Ожидается "RUNNING" у connector и у tasks. Топик pg.public.orders Debezium создаст сам.
+  Если коннектор уже зарегистрирован, POST вернёт 409 Conflict — это нормально, сразу проверяй status.
 
 Шаг 2. Запусти стрим Kafka -> MinIO в ОТДЕЛЬНОМ терминале (работает бесконечно, остановка — Ctrl+C):
   docker exec spark spark-submit /home/jovyan/scripts/kafka_to_minio.py
@@ -71,7 +74,8 @@ Spark сам подхватывает JAR-файлы и настройки MinIO
   Airflow: http://localhost:8080 (admin / admin). Новые DAG'и появляются выключенными — включи переключателем.
 
   DAG'и:
-    raw_to_mart_pipeline     (@daily)  generate_raw_data -> run_dbt (raw_orders -> stg_orders -> mart_daily_sales в Postgres)
+    raw_to_mart_pipeline     (@daily)  generate_raw_data -> dbt_run -> dbt_test
+                                       (raw_orders -> stg_orders -> mart_daily_sales в Postgres -> тесты dbt)
     batch_pg_to_clickhouse   (@daily)  pg_to_minio -> minio_to_clickhouse (ветка 1, шаги 2-3)
     cdc_minio_to_clickhouse  (@hourly) minio_to_clickhouse_cdc -> check_current_state (ветка 2, шаг 5)
                                        стрим kafka_to_minio.py работает отдельно (ветка 2, шаг 2),
@@ -83,6 +87,7 @@ Spark сам подхватывает JAR-файлы и настройки MinIO
 Ручной запуск без Airflow:
   docker exec spark python /home/jovyan/scripts/generate_raw_data.py
   docker exec dbt dbt run
+  docker exec dbt dbt test     # unique / not_null / accepted_values + тесты из dbt/tests
 
 ===============================================
 

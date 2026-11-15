@@ -27,7 +27,14 @@ https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-ja
 cp .env.example .env
 ```
 
-Впиши в `.env` своё значение `SUPERSET_SECRET_KEY` (любая длинная случайная строка). Без этого файла `docker compose` не запустится.
+Заполни в `.env` два значения, без них `docker compose` не запустится:
+
+- `SUPERSET_SECRET_KEY` — любая длинная случайная строка;
+- `AIRFLOW_FERNET_KEY` — ключ шифрования Airflow, сгенерируй его в Git Bash:
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_'
+```
 
 ## 4. Память для Docker (Windows)
 
@@ -44,7 +51,7 @@ swap=8GB
 
 Затем: Quit Docker Desktop → в PowerShell `wsl --shutdown` → запусти Docker Desktop. Проверка: `docker info --format "{{.MemTotal}}"`.
 
-При 8 ГБ RAM запускай стек частями (см. шаг 5) и не держи два Spark-драйвера одновременно.
+При 8 ГБ RAM запускай стек частями (см. шаг 6) и не держи два Spark-драйвера одновременно.
 
 ## 5. Git Bash
 

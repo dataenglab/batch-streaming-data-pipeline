@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: mart_daily_sales
+    description: "Продажи по дням и категориям; гранулярность — (order_date, category)"
+    columns:
+      - name: order_date
+        tests:
+          - not_null
+      - name: category
+        tests:
+          - not_null
+      - name: orders_count
+        tests:
+          - not_null
+      - name: total_amount
+        tests:
+          - not_null

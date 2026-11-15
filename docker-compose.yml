@@ -197,7 +197,7 @@ services:
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:?Set AIRFLOW_FERNET_KEY in .env (see .env.example)}
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__API_AUTH__JWT_SECRET=please_change_me_jwt_secret
@@ -217,7 +217,7 @@ services:
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:?Set AIRFLOW_FERNET_KEY in .env (see .env.example)}
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__API_AUTH__JWT_SECRET=please_change_me_jwt_secret
@@ -245,7 +245,7 @@ services:
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:?Set AIRFLOW_FERNET_KEY in .env (see .env.example)}
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
@@ -272,7 +272,7 @@ services:
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:?Set AIRFLOW_FERNET_KEY in .env (see .env.example)}
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__API_AUTH__JWT_SECRET=please_change_me_jwt_secret
       - AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=10
@@ -327,19 +327,20 @@ services:
       dockerfile: spark/Dockerfile.spark
     container_name: spark
     ports:
-      - "7077:7077"
-      - "8081:8080"
+      - "4040:4040"   # Spark UI первого запущенного job'а (пока он работает)
+      - "4041:4041"   # Spark UI второго job'а
     volumes:
       - ./scripts:/home/jovyan/scripts
       - ./spark/jars:/opt/spark/jars
     environment:
-      - SPARK_MODE=master
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ACCESS_KEY=minio
       - MINIO_SECRET_KEY=minio123
     networks: [de_net]
-    command: >
-      /bin/bash -c "exec /usr/local/spark-3.5.0-bin-hadoop3/bin/spark-class org.apache.spark.deploy.master.Master --host spark --port 7077 --webui-port 8080"
+    # Контейнер-клиент: в нём запускаются spark-submit (local[*], см. spark-defaults.conf)
+    # и python-скрипты. Отдельного Spark-кластера нет — для объёмов учебного проекта
+    # и 8 ГБ RAM local mode достаточно.
+    command: ["sleep", "infinity"]
 
   # --------- Jupyter ----------
   jupyter:
@@ -353,7 +354,6 @@ services:
       - ./scripts:/home/jovyan/scripts
       - ./spark/jars:/opt/spark/jars
     environment:
-      - SPARK_MASTER=spark://spark:7077
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ACCESS_KEY=minio
       - MINIO_SECRET_KEY=minio123

@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: "Очищенные заказы: типы приведены, даты нормализованы, по order_id оставлена последняя запись"
+    columns:
+      - name: order_id
+        description: "Ключ заказа (после дедупликации уникален)"
+        tests:
+          - unique
+          - not_null
+      - name: amount
+        tests:
+          - not_null
+      - name: order_date
+        tests:
+          - not_null
+      - name: category
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["Электроника", "Одежда", "Книги", "Еда", "Игрушки"]

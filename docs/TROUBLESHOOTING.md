@@ -8,8 +8,8 @@
 
 ## Docker / окружение
 
-### `docker compose up` падает: `Set SUPERSET_SECRET_KEY in .env`
-Нет файла `.env`. Решение: `cp .env.example .env` и задать `SUPERSET_SECRET_KEY`.
+### `docker compose up` падает: `Set SUPERSET_SECRET_KEY in .env` / `Set AIRFLOW_FERNET_KEY in .env`
+Нет файла `.env` или в нём не заполнено значение. Решение: `cp .env.example .env` и задать оба ключа (команда генерации `AIRFLOW_FERNET_KEY` — в `.env.example`).
 
 ### `Conflict. The container name "/minio" is already in use`
 В `docker-compose.yml` заданы фиксированные `container_name`, а на машине запущен другой проект с теми же именами. Посмотреть, чьи контейнеры:
