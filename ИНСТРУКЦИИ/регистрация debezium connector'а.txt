@@ -1,11 +1,39 @@
-запустить в терминале (нужно для работы kafka_to_minio.py)
+РЕГИСТРАЦИЯ DEBEZIUM CONNECTOR'А (нужно для kafka_to_minio.py)
 
-PowerShell:
-Invoke-RestMethod -Method Post -Uri http://localhost:8083/connectors/ -ContentType "application/json" -InFile .\pg-connector.json
+Перед регистрацией:
+  - запущен профиль streaming: docker compose --profile streaming up -d
+  - таблица orders в postgres-src существует
 
 Git Bash / Linux / macOS:
-curl -X POST -H "Content-Type: application/json" --data @pg-connector.json http://localhost:8083/connectors/
+  curl -X POST -H "Content-Type: application/json" --data @pg-connector.json http://localhost:8083/connectors/
 
-Таблица orders в postgres-src должна существовать до регистрации коннектора.
+PowerShell:
+  Invoke-RestMethod -Method Post -Uri http://localhost:8083/connectors/ -ContentType "application/json" -InFile .\pg-connector.json
 
-после запуска через пару секунд в kafka появится новый топик pg.public.orders, к которому уже подключится spark
+Проверка:
+  curl http://localhost:8083/connectors/pg-connector/status
+  -> "RUNNING" у connector и у tasks; через пару секунд появится топик pg.public.orders.
+
+Формат сообщений (pg-connector.json):
+  - ExtractNewRecordState — в топик пишется сама строка таблицы, без "конверта" before/after;
+  - delete.tombstone.handling.mode=rewrite — DELETE приходит как строка с полем __deleted = "true";
+  - add.fields=op,lsn,source.ts_ms — служебные поля __op, __lsn, __source_ts_ms
+    (__lsn используется как версия строки в ClickHouse).
+
+===============================================
+
+ПЕРЕРЕГИСТРАЦИЯ С НУЛЯ (если поменял pg-connector.json или после сбоя)
+
+1. Останови стрим kafka_to_minio (Ctrl+C).
+2. Останови коннектор, сбрось его offset'ы и удали:
+     curl -X PUT http://localhost:8083/connectors/pg-connector/stop
+     curl -X DELETE http://localhost:8083/connectors/pg-connector/offsets
+     curl -X DELETE http://localhost:8083/connectors/pg-connector
+3. Удали топик со старыми событиями:
+     docker exec kafka kafka-topics --bootstrap-server kafka:9092 --delete --topic pg.public.orders
+4. Сбрось вывод стрима и checkpoint в MinIO (checkpoint помнит offset'ы удалённого топика):
+     docker compose run --rm --entrypoint sh minio-init -c "mc alias set local http://minio:9000 minio minio123 && mc rm -r --force local/bucket/checkpoints local/bucket/kafka_output"
+5. Очисти таблицы CDC в ClickHouse:
+     docker exec clickhouse clickhouse-client -q "DROP VIEW IF EXISTS orders_current"
+     docker exec clickhouse clickhouse-client -q "DROP TABLE IF EXISTS orders_cdc"
+6. Зарегистрируй коннектор заново (команда выше). Debezium сделает новый снимок таблицы.

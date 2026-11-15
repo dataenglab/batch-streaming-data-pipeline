@@ -19,6 +19,8 @@
     "value.converter.schemas.enable": "false",
     "transforms": "unwrap",
     "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.delete.tombstone.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,lsn,source.ts_ms",
     "tasks.max": "1"
   }
 }

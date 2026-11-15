@@ -1,45 +1,83 @@
-ПЕРЕД ЗАПУСКОМ ЛЮБОГО ПАЙПЛАЙНА УБЕДИСЬ, ЧТО СКАЧАЛ JAR:
-https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-java-sdk-bundle-1.12.526.jar
-Положи его в spark/jars/
+ЗАПУСК ПАЙПЛАЙНОВ
+
+Перед первым запуском:
+  - скачан aws-java-sdk-bundle-1.12.526.jar в spark/jars/ (см. Training_instruction.md)
+  - создан .env (cp .env.example .env)
+  - Git Bash на Windows: выполни один раз
+      echo 'export MSYS_NO_PATHCONV=1' >> ~/.bashrc
+    и открой терминал заново. Иначе Git Bash искажает пути вида /home/jovyan/...
+    (ошибки "No such file" или "No FileSystem for scheme D").
+
+Все команды выполняются в корневой папке проекта (там, где docker-compose.yml).
+Spark сам подхватывает JAR-файлы и настройки MinIO из образа, поэтому --jars и --conf не нужны.
 
 ===============================================
 
 ВЕТКА 1. ПАКЕТНАЯ ЗАГРУЗКА (Postgres -> MinIO -> ClickHouse)
 
-Шаг 1. Создай таблицу в Postgres (если ещё нет):
-  docker exec postgres-src psql -U postgres -d mydb -c "DROP TABLE IF EXISTS orders; CREATE TABLE orders (id SERIAL PRIMARY KEY, name VARCHAR(50), amount FLOAT);"
+Шаг 0. Подними ядро стека:
+  docker compose up -d
 
-Добавь строку (если нужно, id генерируется автоматически):
-  docker exec postgres-src psql -U postgres -d mydb -c "INSERT INTO orders (name, amount) VALUES ('test', 100.5);"
+Шаг 1. Создай таблицу в Postgres и добавь строки:
+  docker exec postgres-src psql -U postgres -d mydb -c "CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, name VARCHAR(50), amount FLOAT);"
+  docker exec postgres-src psql -U postgres -d mydb -c "INSERT INTO orders (name, amount) VALUES ('test', 100.5), ('test2', 200);"
 
-Шаг 2. Запусти transfer из Postgres в MinIO (каждый раз, когда хочешь забрать новую порцию данных из Postgres):
-  docker exec -it spark spark-submit --jars /opt/spark/jars/postgresql-42.6.0.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/pg_to_minio.py
+Шаг 2. Postgres -> MinIO (полный снимок таблицы в s3a://bucket/batch_output):
+  docker exec spark spark-submit /home/jovyan/scripts/pg_to_minio.py
 
-Шаг 3. Запусти transfer из MinIO в ClickHouse (каждый раз, когда хочешь перекинуть данные из MinIO в ClickHouse):
-  docker exec -it spark spark-submit --jars /opt/spark/jars/clickhouse-jdbc-0.5.0-all.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/minio_to_clickhouse.py
+Шаг 3. MinIO -> ClickHouse (полный снимок: TRUNCATE + INSERT в orders_batch, повторный запуск не создаёт дублей):
+  docker exec spark spark-submit /home/jovyan/scripts/minio_to_clickhouse.py
+
+Шаг 4. Проверка:
+  docker exec clickhouse clickhouse-client -q "SELECT * FROM orders_batch ORDER BY id"
 
 ===============================================
 
-ВЕТКА 2. STREAMING (Postgres CDC -> Kafka -> MinIO -> ClickHouse)
+ВЕТКА 2. STREAMING / CDC (Postgres -> Debezium -> Kafka -> MinIO -> ClickHouse)
 
-Предварительно: таблица orders должна существовать (см. ВЕТКА 1, Шаг 1).
-Топик pg.public.orders Debezium создаст сам после регистрации коннектора.
+Шаг 0. Подними ядро + стриминг:
+  docker compose --profile streaming up -d
+  Таблица orders должна существовать (ветка 1, шаг 1).
 
-Шаг 1. Активируй Debezium connector:
-  PowerShell:
-  Invoke-RestMethod -Method Post -Uri http://localhost:8083/connectors/ -ContentType "application/json" -InFile .\pg-connector.json
-  Git Bash / Linux / macOS:
+Шаг 1. Зарегистрируй Debezium-коннектор (подробнее — "регистрация debezium connector'а.txt"):
   curl -X POST -H "Content-Type: application/json" --data @pg-connector.json http://localhost:8083/connectors/
+  curl http://localhost:8083/connectors/pg-connector/status
+  Ожидается "RUNNING" у connector и у tasks. Топик pg.public.orders Debezium создаст сам.
 
-Шаг 2. Запусти streaming в MinIO (запускаешь один раз, работает в бесконечном цикле):
-  docker exec -it spark spark-submit --jars /opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0 --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/kafka_to_minio.py
+Шаг 2. Запусти стрим Kafka -> MinIO в ОТДЕЛЬНОМ терминале (работает бесконечно, остановка — Ctrl+C):
+  docker exec spark spark-submit /home/jovyan/scripts/kafka_to_minio.py
+  Checkpoint хранится в s3a://bucket/checkpoints/kafka_orders, после перезапуска стрим продолжит с того же места.
 
-Шаг 3. Данные из MinIO (kafka_output) в ClickHouse (таблица kafka_orders):
-  docker exec -it spark spark-submit --jars /opt/spark/jars/clickhouse-jdbc-0.5.0-all.jar,/opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.526.jar --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=minio --conf spark.hadoop.fs.s3a.secret.key=minio123 --conf spark.hadoop.fs.s3a.path.style.access=true /home/jovyan/scripts/minio_to_clickhouse_kafka.py
+Шаг 3. Поменяй данные в Postgres:
+  docker exec postgres-src psql -U postgres -d mydb -c "INSERT INTO orders (name, amount) VALUES ('cdc_test', 777);"
+  docker exec postgres-src psql -U postgres -d mydb -c "UPDATE orders SET amount = 999 WHERE name = 'test';"
+  docker exec postgres-src psql -U postgres -d mydb -c "DELETE FROM orders WHERE name = 'test2';"
+
+Шаг 4. Через 15-20 секунд останови стрим (Ctrl+C) — при 8 ГБ RAM два Spark-драйвера одновременно не помещаются.
+
+Шаг 5. MinIO -> ClickHouse (разбор JSON, дедупликация через ReplacingMergeTree):
+  docker exec spark spark-submit /home/jovyan/scripts/minio_to_clickhouse_kafka.py
+
+Шаг 6. Проверка:
+  все события CDC:   docker exec clickhouse clickhouse-client -q "SELECT * FROM orders_cdc ORDER BY id, version"
+  текущее состояние: docker exec clickhouse clickhouse-client -q "SELECT * FROM orders_current ORDER BY id"
+  В orders_current должны быть те же строки, что сейчас в Postgres: test с amount 999, без test2.
+
+===============================================
+
+ОРКЕСТРАЦИЯ (Airflow + dbt)
+
+  docker compose --profile orchestration up -d
+  Airflow: http://localhost:8080 (admin / admin), DAG raw_to_mart_pipeline:
+  generate_raw_data (грязные данные в Postgres raw_orders) -> run_dbt (stg_orders -> mart_daily_sales в Postgres).
+
+Ручной запуск без Airflow:
+  docker exec spark python /home/jovyan/scripts/generate_raw_data.py
+  docker exec dbt dbt run
 
 ===============================================
 
 ОТДЕЛЬНЫЙ СКРИПТ (не streaming), запускается на твоём компьютере:
   pip install kafka-python
   python scripts/kafka_producer.py
-Генерирует данные в топик sensor_metrics (нужно создать через Kafka UI).
+Генерирует данные в топик sensor_metrics (создай его в Kafka UI, localhost:8082).

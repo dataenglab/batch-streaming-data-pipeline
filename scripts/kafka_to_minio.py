@@ -17,7 +17,9 @@ df = spark.readStream.format("kafka")\
     .option("startingOffsets", "earliest")\
     .load()
 
-df_str = df.selectExpr("CAST(value AS STRING)")
+# Сырые события Debezium сохраняем как есть (JSON-строка) — это "bronze"-слой.
+# Разбор JSON и дедупликация — в minio_to_clickhouse_kafka.py.
+df_str = df.selectExpr("CAST(value AS STRING) AS value").where("value IS NOT NULL")
 
 # --- 4. Запись в MinIO ---
 query_minio = df_str.writeStream \

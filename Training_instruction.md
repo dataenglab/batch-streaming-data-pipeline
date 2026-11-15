@@ -29,13 +29,47 @@ cp .env.example .env
 
 Впиши в `.env` своё значение `SUPERSET_SECRET_KEY` (любая длинная случайная строка). Без этого файла `docker compose` не запустится.
 
-## 4. Запуск
+## 4. Память для Docker (Windows)
 
-Убедись, что Docker запущен, и выполни (первая сборка долгая):
+Весь стек требует ~8 ГБ памяти для Docker. По умолчанию Docker Desktop на WSL2 получает половину RAM компьютера — на ноутбуке с 8 ГБ это 4 ГБ, и Docker падает с ошибкой `500 Internal Server Error`, как только стартует Spark.
+
+Создай файл `C:\Users\<имя>\.wslconfig` (именно в папке пользователя, без `.txt` в конце):
+
+```ini
+[wsl2]
+memory=5GB
+processors=4
+swap=8GB
+```
+
+Затем: Quit Docker Desktop → в PowerShell `wsl --shutdown` → запусти Docker Desktop. Проверка: `docker info --format "{{.MemTotal}}"`.
+
+При 8 ГБ RAM запускай стек частями (см. шаг 5) и не держи два Spark-драйвера одновременно.
+
+## 5. Git Bash
+
+Git Bash переписывает пути вида `/home/jovyan/...` в пути Windows, и команды `docker exec` ломаются. Выполни один раз и открой терминал заново:
 
 ```bash
-docker compose up -d --build
+echo 'export MSYS_NO_PATHCONV=1' >> ~/.bashrc
 ```
+
+## 6. Запуск
+
+Убедись, что Docker запущен. Сервисы разбиты на профили, чтобы стек можно было поднимать частями:
+
+| Команда | Что запускается |
+| --- | --- |
+| `docker compose up -d --build` | ядро: Postgres, MinIO, ClickHouse, Spark (батч-ветка) |
+| `docker compose --profile streaming up -d` | + ZooKeeper, Kafka, Debezium, Kafka UI (CDC-ветка) |
+| `docker compose --profile orchestration up -d` | + Airflow, dbt |
+| `docker compose --profile bi up -d` | + Superset |
+| `docker compose --profile dev up -d` | + Jupyter |
+| `docker compose --profile streaming --profile orchestration --profile bi --profile dev up -d` | всё сразу (нужно 8+ ГБ для Docker) |
+
+Остановить всё: `docker compose --profile streaming --profile orchestration --profile bi --profile dev down` (без `-v` данные в томах сохранятся).
+
+Первая сборка образов долгая. Если упало что-то непонятное — см. [TROUBLESHOOTING](docs/TROUBLESHOOTING.md).
 
 ## Скрипты
 
@@ -45,12 +79,12 @@ docker compose up -d --build
 | --- | --- |
 | `kafka_to_minio.py` | «верхняя ветка»: стриминг изменений Postgres (Debezium → Kafka → MinIO) |
 | `pg_to_minio.py` | «нижняя ветка»: батчевая выгрузка Postgres → MinIO |
-| `minio_to_clickhouse.py` | паркеты из `batch_output` → ClickHouse (`new_table`) |
-| `minio_to_clickhouse_kafka.py` | паркеты из `kafka_output` → ClickHouse (`kafka_orders`) |
+| `minio_to_clickhouse.py` | полный снимок из `batch_output` → ClickHouse (`orders_batch`, TRUNCATE + INSERT) |
+| `minio_to_clickhouse_kafka.py` | события CDC из `kafka_output` → ClickHouse (`orders_cdc`, ReplacingMergeTree) + представление `orders_current` |
 | `generate_raw_data.py` | генерирует «грязные» данные в `raw_orders` для dbt (запускается из DAG `raw_to_mart_pipeline`) |
 | `kafka_producer.py` | генератор тестовых сообщений в топик `sensor_metrics` (создай его в Kafka UI, localhost:8082: 1 партиция, 1 реплика) |
 
-❗ `kafka_producer.py` запускается на твоём компьютере (`pip install kafka-python`, затем `python scripts/kafka_producer.py`). Spark-скрипты запускаются через `docker exec ... spark-submit`, как описано в инструкциях.
+❗ `kafka_producer.py` запускается на твоём компьютере (`pip install kafka-python`, затем `python scripts/kafka_producer.py`). Spark-скрипты запускаются через `docker exec spark spark-submit /home/jovyan/scripts/<скрипт>.py`, как описано в инструкциях.
 
 Для `kafka_to_minio.py` нужно зарегистрировать Debezium-коннектор — инструкция прилагается.
 

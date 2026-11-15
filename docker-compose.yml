@@ -1,10 +1,10 @@
-version: "3.9"
-
-x-env: &default-env
-  MINIO_ROOT_USER: minio
-  MINIO_ROOT_PASSWORD: minio123
-  CLICKHOUSE_USER: admin
-  CLICKHOUSE_PASSWORD: clickhouse
+# Профили (стек целиком требует ~8 ГБ RAM для Docker, поэтому его можно запускать частями):
+#   без профиля   — ядро: postgres-src, minio, clickhouse, spark (батч-ветка)
+#   streaming     — zookeeper, kafka, debezium, kafka-ui (CDC-ветка)
+#   orchestration — airflow + dbt
+#   bi            — superset
+#   dev           — jupyter
+# Пример: docker compose --profile streaming up -d
 
 networks:
   de_net:
@@ -13,7 +13,6 @@ networks:
 volumes:
   postgres_airflow_data:
   postgres_app_data:
-  postgres_superset_data:
   clickhouse_data:
   minio_data:
   superset_home:
@@ -42,6 +41,7 @@ services:
 
   # ---------- Zookeeper ----------
   zookeeper:
+    profiles: [streaming]
     image: zookeeper:3.8.2
     container_name: zookeeper
     environment:
@@ -52,6 +52,7 @@ services:
 
   # ---------- Kafka ----------
   kafka:
+    profiles: [streaming]
     image: confluentinc/cp-kafka:7.5.1
     container_name: kafka
     depends_on: [zookeeper]
@@ -70,6 +71,7 @@ services:
 
   # ---------- Debezium Kafka Connect ----------
   debezium:
+    profiles: [streaming]
     image: debezium/connect:2.7.0.Final
     container_name: debezium
     depends_on: [kafka, zookeeper]
@@ -88,6 +90,7 @@ services:
 
   # ---------- Kafka UI ----------
   kafka-ui:
+    profiles: [streaming]
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     depends_on:
@@ -154,8 +157,6 @@ services:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_ALLOW_SPARK=1
-      - CLICKHOUSE_NETWORK_COMPRESSION=1
     networks:
       - de_net
 
@@ -163,6 +164,7 @@ services:
 
   # ---------- Postgres for Airflow ----------
   postgres-airflow:
+    profiles: [orchestration]
     image: postgres:14
     container_name: postgres-airflow
     environment:
@@ -180,19 +182,21 @@ services:
 
   # ---------- Airflow Initialization ----------
   airflow-init:
+    profiles: [orchestration]
     build:
       context: .        # <- использует твой Dockerfile
       dockerfile: Dockerfile.airflow
     container_name: airflow-init
     depends_on:
-      - postgres-airflow
+      postgres-airflow:
+        condition: service_healthy
     entrypoint: >
       bash -c "airflow db migrate &&
                airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=please_change_me
+      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__API_AUTH__JWT_SECRET=please_change_me_jwt_secret
@@ -200,17 +204,19 @@ services:
 
   # ---------- Airflow API Server (UI + REST API) ----------
   airflow-webserver:
+    profiles: [orchestration]
     build:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-webserver
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
     command: api-server
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=please_change_me
+      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__API_AUTH__JWT_SECRET=please_change_me_jwt_secret
@@ -226,17 +232,19 @@ services:
 
   # ---------- Airflow Scheduler ----------
   airflow-scheduler:
+    profiles: [orchestration]
     build:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-scheduler
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
     command: scheduler
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=please_change_me
+      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-webserver:8080/execution/
@@ -251,17 +259,19 @@ services:
 
   # ---------- Airflow DAG Processor (обязателен начиная с Airflow 3) ----------
   airflow-dag-processor:
+    profiles: [orchestration]
     build:
       context: .
       dockerfile: Dockerfile.airflow
     container_name: airflow-dag-processor
     depends_on:
-      - airflow-init
+      airflow-init:
+        condition: service_completed_successfully
     command: dag-processor
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
-      - AIRFLOW__CORE__FERNET_KEY=please_change_me
+      - AIRFLOW__CORE__FERNET_KEY=VNXuUDugFSESrG-2XZxG1ynyXsFZwOLDQnILanSG2gQ=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__API_AUTH__JWT_SECRET=please_change_me_jwt_secret
       - AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=10
@@ -274,6 +284,7 @@ services:
 
   # ---------- Superset ----------
   superset:
+    profiles: [bi]
     build:
       context: .
       dockerfile: Dockerfile.superset
@@ -293,6 +304,7 @@ services:
 
   # ---------- DBT ----------
   dbt:
+    profiles: [orchestration]
     container_name: dbt
     build:
       context: .
@@ -330,6 +342,7 @@ services:
 
   # --------- Jupyter ----------
   jupyter:
+    profiles: [dev]
     image: jupyter/pyspark-notebook:latest
     container_name: jupyter
     ports:
