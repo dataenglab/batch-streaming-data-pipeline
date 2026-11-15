@@ -68,8 +68,17 @@ Spark сам подхватывает JAR-файлы и настройки MinIO
 ОРКЕСТРАЦИЯ (Airflow + dbt)
 
   docker compose --profile orchestration up -d
-  Airflow: http://localhost:8080 (admin / admin), DAG raw_to_mart_pipeline:
-  generate_raw_data (грязные данные в Postgres raw_orders) -> run_dbt (stg_orders -> mart_daily_sales в Postgres).
+  Airflow: http://localhost:8080 (admin / admin). Новые DAG'и появляются выключенными — включи переключателем.
+
+  DAG'и:
+    raw_to_mart_pipeline     (@daily)  generate_raw_data -> run_dbt (raw_orders -> stg_orders -> mart_daily_sales в Postgres)
+    batch_pg_to_clickhouse   (@daily)  pg_to_minio -> minio_to_clickhouse (ветка 1, шаги 2-3)
+    cdc_minio_to_clickhouse  (@hourly) minio_to_clickhouse_cdc -> check_current_state (ветка 2, шаг 5)
+                                       стрим kafka_to_minio.py работает отдельно (ветка 2, шаг 2),
+                                       для CDC нужен профиль streaming
+
+  Все Spark-задачи используют пул "spark" с 1 слотом (создаётся в airflow-init),
+  поэтому два Spark-драйвера одновременно не запустятся. Проверить: Admin -> Pools.
 
 Ручной запуск без Airflow:
   docker exec spark python /home/jovyan/scripts/generate_raw_data.py

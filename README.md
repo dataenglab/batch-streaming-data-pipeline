@@ -289,6 +289,8 @@ BI
 batch-streaming-data-pipeline/
 │
 ├── dags/
+│   ├── batch_pg_to_clickhouse.py
+│   ├── cdc_minio_to_clickhouse.py
 │   ├── raw_to_mart_pipeline.py
 │   └── test_dag.py
 │
@@ -477,7 +479,13 @@ BI / Analytics
 
 # Orchestration
 
-Airflow DAG `raw_to_mart_pipeline` (daily): `generate_raw_data` → `run_dbt`. Each task runs `docker exec` into the `spark` and `dbt` containers through the Docker socket mounted into the scheduler.
+| DAG | Schedule | Tasks |
+| --- | --- | --- |
+| `raw_to_mart_pipeline` | daily | `generate_raw_data` → `run_dbt` (Postgres raw → staging → mart) |
+| `batch_pg_to_clickhouse` | daily | `pg_to_minio` → `minio_to_clickhouse` |
+| `cdc_minio_to_clickhouse` | hourly | `minio_to_clickhouse_cdc` → `check_current_state` |
+
+Tasks run `docker exec` into the `spark`, `dbt` and `clickhouse` containers through the Docker socket mounted into the scheduler. All Spark tasks share the Airflow pool `spark` with a single slot (created in `airflow-init`), so only one Spark driver runs at a time — the stack is sized for an 8 GB laptop. The CDC stream itself (`kafka_to_minio.py`) is a long-running process and is started outside Airflow; the hourly DAG moves the accumulated events into ClickHouse.
 
 ---
 
@@ -561,7 +569,7 @@ All parts were verified end-to-end from a clean clone. Problems met along the wa
 
 Further improvements can include:
 
-* Airflow DAGs for the batch and CDC loads (currently started manually)
+* running the CDC stream as a supervised service instead of a manual `spark-submit`
 * dbt models on top of ClickHouse
 * automated data quality checks
 * additional dbt tests
