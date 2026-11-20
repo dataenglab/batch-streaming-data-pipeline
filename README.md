@@ -1,152 +1,150 @@
 # Batch & Streaming Data Pipeline
 
-End-to-end data engineering project demonstrating **batch data processing, real-time CDC streaming, orchestration, data transformation and analytical storage**.
+Сквозной (end-to-end) проект по Data Engineering: **пакетная обработка данных, CDC-стриминг почти в реальном времени, оркестрация, трансформации и аналитическое хранилище**.
 
-The project combines PostgreSQL, Debezium, Apache Kafka, MinIO, Apache Spark, ClickHouse, Apache Airflow and dbt into a Docker-based data platform.
+Проект объединяет PostgreSQL, Debezium, Apache Kafka, MinIO, Apache Spark, ClickHouse, Apache Airflow и dbt в одну платформу данных на Docker.
 
 ---
 
-## Architecture
+## Архитектура
 
 ```text
                         ┌────────────────────────────┐
                         │   PostgreSQL (postgres-src) │
-                        │        source OLTP DB       │
+                        │    исходная OLTP-база       │
                         └──────┬──────────────┬──────┘
                                │              │
-          Batch flow           │              │           CDC flow
-   (full snapshot, on demand)  │              │   (WAL → events, continuous)
+        Пакетная ветка         │              │          CDC-ветка
+  (полный снимок, по запросу)  │              │  (WAL → события, непрерывно)
                                ▼              ▼
                       Spark (pg_to_minio)   Debezium (Kafka Connect)
                                │              │
                                ▼              ▼
-                     MinIO batch_output     Kafka topic pg.public.orders
+                     MinIO batch_output     Kafka-топик pg.public.orders
                                │              │
                                │              ▼
                                │     Spark Structured Streaming
                                │       (kafka_to_minio)
                                │              │
                                │              ▼
-                               │     MinIO kafka_output (raw JSON)
+                               │     MinIO kafka_output (сырой JSON)
                                │              │
                                ▼              ▼
              Spark (minio_to_clickhouse)   Spark (minio_to_clickhouse_kafka)
                                │              │
                                ▼              ▼
                 ClickHouse orders_batch    ClickHouse orders_cdc (ReplacingMergeTree)
-                (TRUNCATE + INSERT)           └─► view orders_current
+                (TRUNCATE + INSERT)           └─► представление orders_current
                                │              │
                                └──────┬───────┘
                                       ▼
                                    Superset
 
 
-   Orchestrated transformation flow (Airflow DAG raw_to_mart_pipeline):
+   Оркестрируемые трансформации (DAG Airflow raw_to_mart_pipeline):
 
    generate_raw_data.py ─► PostgreSQL raw_orders ─► dbt stg_orders ─► dbt mart_daily_sales ─► dbt test ─► Superset
-   (dirty data: duplicates,     (view: cleaning,        (table: daily sales
-    mixed date formats)          dedup, type casting)    by category)
+   («грязные» данные: дубли,   (view: очистка,          (таблица: продажи
+    разные форматы дат)         дедупликация, типы)       по дням и категориям)
 ```
 
 ---
 
-### Superset dashboard
+### Дашборд в Superset
 
-![Superset dashboard](docs/superset_dashboard.png)
+![Дашборд Superset](docs/superset_dashboard.png)
 
 ---
 
-## Project Overview
+## Обзор проекта
 
-The project demonstrates two main data processing approaches:
+Проект показывает два основных подхода к обработке данных.
 
-### Batch processing
+### Пакетная обработка (batch)
 
-A full snapshot of the `orders` table is extracted from PostgreSQL by Spark, stored as Parquet in MinIO and loaded into ClickHouse. Because each run produces a full snapshot, the ClickHouse table is reloaded with TRUNCATE + INSERT, so reruns are idempotent and rows deleted in the source disappear from ClickHouse.
+Spark забирает полный снимок таблицы `orders` из PostgreSQL, сохраняет его в Parquet в MinIO и загружает в ClickHouse. Так как каждый запуск даёт полный снимок, таблица в ClickHouse перезагружается через TRUNCATE + INSERT: повторный запуск идемпотентен, а строки, удалённые в источнике, исчезают и из ClickHouse.
 
 ```text
 PostgreSQL → Spark → MinIO (Parquet) → Spark → ClickHouse orders_batch
 ```
 
-### Streaming / CDC
+### Стриминг / CDC
 
-Changes in PostgreSQL are captured from the WAL by Debezium and published to Kafka. Spark Structured Streaming lands the raw events in MinIO; a separate Spark job parses the JSON and loads it into a `ReplacingMergeTree` table versioned by the Postgres LSN, with deletes flagged via `is_deleted`. The `orders_current` view exposes the current state of the source table.
+Debezium читает изменения PostgreSQL из WAL и публикует их в Kafka. Spark Structured Streaming сохраняет сырые события в MinIO; отдельная Spark-задача разбирает JSON и загружает его в таблицу `ReplacingMergeTree`, где версией строки служит LSN из Postgres, а удаления помечаются флагом `is_deleted`. Представление `orders_current` показывает текущее состояние исходной таблицы.
 
 ```text
-PostgreSQL → Debezium → Kafka → Spark Structured Streaming → MinIO (raw JSON)
-           → Spark (parse + version) → ClickHouse orders_cdc → view orders_current
+PostgreSQL → Debezium → Kafka → Spark Structured Streaming → MinIO (сырой JSON)
+           → Spark (разбор + версия) → ClickHouse orders_cdc → представление orders_current
 ```
 
-### Orchestrated transformations (Airflow + dbt)
+### Оркестрируемые трансформации (Airflow + dbt)
 
-An Airflow DAG generates intentionally dirty raw data in PostgreSQL and runs dbt models on top of it: a staging view that cleans, casts and deduplicates, and a mart table with daily sales by category, visualized in Superset. dbt tests check keys, accepted values and the grain of the mart after every run.
+DAG в Airflow генерирует в PostgreSQL намеренно «грязные» сырые данные и запускает поверх них модели dbt: staging-представление, которое очищает данные, приводит типы и убирает дубли, и витрину с ежедневными продажами по категориям, которая визуализируется в Superset. После каждого запуска тесты dbt проверяют ключи, допустимые значения и гранулярность витрины.
 
 ```text
 Airflow: generate_raw_data → PostgreSQL raw_orders → dbt run (stg_orders, mart_daily_sales) → dbt test → Superset
 ```
 
-This allows the project to demonstrate batch ETL, event-driven CDC and ELT with dbt.
+Таким образом, в проекте есть пакетный ETL, событийный CDC и ELT на dbt.
 
 ---
 
-## Tech Stack
+## Технологии
 
-| Technology          | Purpose                                         |
-| ------------------- | ----------------------------------------------- |
-| **Python**          | Data extraction, producers and pipeline scripts |
-| **Apache Airflow**  | Workflow orchestration                          |
-| **Apache Spark**    | Batch and Structured Streaming jobs (local mode)|
-| **Apache Kafka**    | Event streaming and message transport           |
-| **Debezium**        | Change Data Capture from PostgreSQL             |
-| **PostgreSQL**      | Source relational database                      |
-| **MinIO**           | S3-compatible object storage / data lake layer  |
-| **ClickHouse**      | Analytical database                             |
-| **dbt**             | SQL transformations and data marts              |
-| **Apache Superset** | Data visualization                              |
-| **Docker Compose**  | Local infrastructure and service orchestration  |
-| **Git**             | Version control                                 |
+| Технология          | Назначение                                              |
+| ------------------- | ------------------------------------------------------- |
+| **Python**          | Извлечение данных, продюсеры и скрипты пайплайнов       |
+| **Apache Airflow**  | Оркестрация процессов                                   |
+| **Apache Spark**    | Пакетные задачи и Structured Streaming (local mode)     |
+| **Apache Kafka**    | Потоковая передача событий                              |
+| **Debezium**        | Change Data Capture из PostgreSQL                       |
+| **PostgreSQL**      | Исходная реляционная база                               |
+| **MinIO**           | S3-совместимое объектное хранилище / слой data lake     |
+| **ClickHouse**      | Аналитическая база данных                               |
+| **dbt**             | SQL-трансформации и витрины данных                      |
+| **Apache Superset** | Визуализация данных                                     |
+| **Docker Compose**  | Локальная инфраструктура и управление сервисами         |
+| **Git**             | Контроль версий                                         |
 
 ---
 
-## Data Engineering Concepts Demonstrated
-
-This project covers several practical Data Engineering concepts:
+## Какие концепции Data Engineering показаны
 
 * ETL / ELT
-* Batch processing
-* Streaming data processing
+* Пакетная обработка
+* Потоковая обработка данных
 * Change Data Capture (CDC)
-* Event-driven architecture
-* Data lake / object storage
-* Analytical databases (ClickHouse MergeTree / ReplacingMergeTree)
-* Spark batch jobs and Spark Structured Streaming (local mode)
-* Idempotent loads (full snapshot reload, versioned upserts by LSN)
-* Workflow orchestration with Airflow (DAG dependencies, retries, pools)
-* SQL transformations with dbt (staging → mart)
-* Data quality tests with dbt (generic and singular tests)
-* Data marts
-* Dockerized data infrastructure (Compose profiles)
-* S3-compatible storage
+* Событийная (event-driven) архитектура
+* Data lake / объектное хранилище
+* Аналитические базы (ClickHouse MergeTree / ReplacingMergeTree)
+* Пакетные задачи Spark и Spark Structured Streaming (local mode)
+* Идемпотентные загрузки (полная перезагрузка снимка, версионные upsert по LSN)
+* Оркестрация в Airflow (зависимости в DAG, повторы, пулы)
+* SQL-трансформации в dbt (staging → mart)
+* Тесты качества данных в dbt (generic и singular)
+* Витрины данных
+* Инфраструктура данных в Docker (профили Compose)
+* S3-совместимое хранилище
 
 ---
 
-## Pipeline Components
+## Компоненты пайплайна
 
 ### PostgreSQL
 
-PostgreSQL is used as the source OLTP database.
+PostgreSQL — исходная OLTP-база.
 
-The project uses it as the initial source of transactional data and as the source for CDC events.
+Это начальный источник транзакционных данных и источник CDC-событий.
 
 ---
 
 ### Debezium
 
-Debezium is used to capture changes made to PostgreSQL.
+Debezium фиксирует изменения в PostgreSQL.
 
-Instead of periodically querying the entire source table, CDC captures database changes and publishes events to Kafka.
+Вместо того чтобы периодически перечитывать всю таблицу, CDC получает изменения базы и публикует их как события в Kafka.
 
-Conceptually:
+Схематично:
 
 ```text
 INSERT / UPDATE / DELETE
@@ -158,83 +156,83 @@ INSERT / UPDATE / DELETE
          Kafka
 ```
 
-This demonstrates an event-driven approach to data integration.
+Это событийный подход к интеграции данных.
 
 ---
 
 ### Apache Kafka
 
-Kafka acts as the event streaming layer.
+Kafka — слой потоковой передачи событий.
 
-It provides a decoupled communication layer between data producers and downstream consumers.
+Она развязывает источники данных и потребителей ниже по потоку: они работают независимо друг от друга.
 
-The project contains Kafka-related scripts for producing and processing events.
+В проекте есть скрипты для отправки и обработки событий Kafka.
 
 ---
 
 ### MinIO
 
-MinIO provides S3-compatible object storage.
+MinIO — S3-совместимое объектное хранилище.
 
-It is used as a local data lake / staging layer for pipeline data.
+Используется как локальный data lake / промежуточный слой для данных пайплайна.
 
-The project uses Spark and S3A-compatible configuration to interact with MinIO.
+Spark работает с MinIO через S3A-совместимую конфигурацию.
 
 ---
 
 ### Apache Spark
 
-Spark runs batch jobs and a Structured Streaming job. Jobs are submitted inside the `spark` container in **local mode** (`local[*]`): there is no separate Spark cluster, which is enough for the data volumes of this project and fits an 8 GB laptop. The Spark UI of a running job is available at http://localhost:4040.
+Spark выполняет пакетные задачи и задачу Structured Streaming. Задачи запускаются внутри контейнера `spark` в **local mode** (`local[*]`): отдельного Spark-кластера нет — для объёмов данных этого проекта этого достаточно, и стек помещается на ноутбук с 8 ГБ памяти. Spark UI запущенной задачи доступен по адресу http://localhost:4040.
 
-The Spark image includes the connectors/JARs for integration with:
+В образ Spark включены коннекторы/JAR-файлы для интеграции с:
 
 * Kafka
 * PostgreSQL
 * MinIO / S3
 * ClickHouse
 
-All dependencies live in `spark/jars/` and are copied into `$SPARK_HOME/jars` at build time (no `--packages`, see [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)).
+Все зависимости лежат в `spark/jars/` и копируются в `$SPARK_HOME/jars` при сборке образа (без `--packages`, см. [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)).
 
 ---
 
 ### ClickHouse
 
-ClickHouse is used as the analytical storage layer.
+ClickHouse — слой аналитического хранения.
 
-Both pipelines land in ClickHouse: `orders_batch` (MergeTree, full reload) and `orders_cdc` (`ReplacingMergeTree(version, is_deleted)`, deduplicated by the Postgres LSN) with the `orders_current` view on top.
+Обе ветки приходят в ClickHouse: `orders_batch` (MergeTree, полная перезагрузка) и `orders_cdc` (`ReplacingMergeTree(version, is_deleted)`, дедупликация по LSN из Postgres) с представлением `orders_current` поверх.
 
-This separates the analytical workload from the transactional PostgreSQL source.
+Так аналитическая нагрузка отделена от транзакционного источника PostgreSQL.
 
 ---
 
 ### dbt
 
-dbt is used for SQL-based transformations of the raw data in PostgreSQL (`raw_orders`). The ClickHouse adapter is installed, so the models can be moved to ClickHouse later.
+dbt выполняет SQL-трансформации сырых данных в PostgreSQL (`raw_orders`). Адаптер для ClickHouse установлен, поэтому модели позже можно перенести в ClickHouse.
 
-* `sources.yml` — the raw table `raw_orders` declared as a dbt source (`{{ source('raw', 'raw_orders') }}`)
-* `stg_orders` (view) — type casting, normalization of three date formats, deduplication by `order_id`
-* `mart_daily_sales` (table) — daily sales by category
-* tests — `unique` / `not_null` / `accepted_values` in `schema.yml` and singular tests in `dbt/tests/` (grain of the mart, positive amounts); `dbt test` runs as a task in the Airflow DAG
+* `sources.yml` — сырая таблица `raw_orders` объявлена как источник dbt (`{{ source('raw', 'raw_orders') }}`)
+* `stg_orders` (view) — приведение типов, нормализация трёх форматов дат, дедупликация по `order_id`
+* `mart_daily_sales` (table) — ежедневные продажи по категориям
+* тесты — `unique` / `not_null` / `accepted_values` в `schema.yml` и singular-тесты в `dbt/tests/` (гранулярность витрины, положительные суммы); `dbt test` запускается отдельной задачей в DAG Airflow
 
-The transformation layer follows a staging → mart approach:
+Слой трансформаций построен по схеме staging → mart:
 
 ```text
-Raw data
+Сырые данные
    ↓
-staging models
+staging-модели
    ↓
-analytical models
+аналитические модели
    ↓
-data marts
+витрины данных
 ```
 
 ---
 
 ### Apache Airflow
 
-Airflow is used for pipeline orchestration.
+Airflow отвечает за оркестрацию пайплайнов.
 
-The DAG `raw_to_mart_pipeline` runs daily:
+DAG `raw_to_mart_pipeline` запускается ежедневно:
 
 ```text
 generate_raw_data (docker exec spark python ...)
@@ -244,41 +242,41 @@ dbt_run  (docker exec dbt dbt run)
 dbt_test (docker exec dbt dbt test)
 ```
 
-Two more DAGs load the batch and CDC data into ClickHouse — see [Orchestration](#orchestration).
+Ещё два DAG загружают пакетные и CDC-данные в ClickHouse — см. раздел [Оркестрация](#оркестрация).
 
-Tasks call other containers through the Docker socket mounted into the scheduler.
+Задачи обращаются к другим контейнерам через Docker-сокет, подключённый к scheduler.
 
-Airflow provides scheduling, dependency management and execution tracking.
+Airflow даёт расписание, управление зависимостями и отслеживание запусков.
 
 ---
 
 ### Apache Superset
 
-Superset is used as the BI / visualization layer.
+Superset — слой BI / визуализации.
 
-The final analytical data can be exposed through dashboards and charts.
+Итоговые аналитические данные можно показать на дашбордах и графиках.
 
-The complete architecture therefore covers the path:
+Таким образом, архитектура покрывает весь путь данных:
 
 ```text
-Source
+Источник
   ↓
-Ingestion
+Загрузка (ingestion)
   ↓
-Storage
+Хранение
   ↓
-Processing
+Обработка
   ↓
-Transformation
+Трансформация
   ↓
-Data Mart
+Витрина данных
   ↓
 BI
 ```
 
 ---
 
-# Repository Structure
+# Структура репозитория
 
 ```text
 batch-streaming-data-pipeline/
@@ -338,30 +336,30 @@ batch-streaming-data-pipeline/
 
 ---
 
-# Running the Project
+# Запуск проекта
 
-## Prerequisites
+## Что нужно заранее
 
 * Docker + Docker Compose v2
 * Git
-* **Memory:** the full stack needs ~8 GB RAM for Docker. Services are split into Compose profiles, so on an 8 GB laptop the stack can be run in parts (see below). On Windows/WSL2 Docker gets only half of the RAM by default — set `memory` and `swap` in `%UserProfile%\.wslconfig` (see [Training_instruction.md](Training_instruction.md)).
-* Git Bash on Windows: `export MSYS_NO_PATHCONV=1` (otherwise paths in `docker exec` commands get rewritten)
+* **Память:** полному стеку нужно около 8 ГБ RAM для Docker. Сервисы разделены на профили Compose, поэтому на ноутбуке с 8 ГБ стек можно запускать частями (см. ниже). В Windows/WSL2 Docker по умолчанию получает только половину памяти — задай `memory` и `swap` в `%UserProfile%\.wslconfig` (см. [Training_instruction.md](Training_instruction.md)).
+* Git Bash в Windows: `export MSYS_NO_PATHCONV=1` (иначе пути в командах `docker exec` искажаются)
 
-Clone the repository:
+Склонируй репозиторий:
 
 ```bash
 git clone https://github.com/dataenglab/batch-streaming-data-pipeline.git
 cd batch-streaming-data-pipeline
 ```
 
-Download the AWS SDK bundle JAR (~300 MB, not stored in Git) into `spark/jars/` — it is required to build the Spark and Airflow images:
+Скачай JAR AWS SDK bundle (~300 МБ, в Git не хранится) в `spark/jars/` — он нужен для сборки образов Spark и Airflow:
 
 ```bash
 curl -L -o spark/jars/aws-java-sdk-bundle-1.12.526.jar \
   https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.526/aws-java-sdk-bundle-1.12.526.jar
 ```
 
-Create the local environment file (excluded from Git) and fill in `SUPERSET_SECRET_KEY` and `AIRFLOW_FERNET_KEY` (the generation command is in `.env.example`):
+Создай локальный файл окружения (он исключён из Git) и заполни `SUPERSET_SECRET_KEY` и `AIRFLOW_FERNET_KEY` (команда для генерации есть в `.env.example`):
 
 ```bash
 cp .env.example .env
@@ -369,157 +367,157 @@ cp .env.example .env
 
 ---
 
-## Start the infrastructure
+## Запуск инфраструктуры
 
-Services are grouped into Compose profiles:
+Сервисы сгруппированы в профили Compose:
 
-| Profile | Services | Used for |
+| Профиль | Сервисы | Для чего |
 | --- | --- | --- |
-| *(none)* | postgres-src, minio, clickhouse, spark | batch pipeline |
-| `streaming` | zookeeper, kafka, debezium, kafka-ui | CDC pipeline |
+| *(без профиля)* | postgres-src, minio, clickhouse, spark | пакетная ветка |
+| `streaming` | zookeeper, kafka, debezium, kafka-ui | CDC-ветка |
 | `orchestration` | airflow (init, api-server, scheduler, dag-processor), postgres-airflow, dbt | Airflow + dbt |
-| `bi` | superset | dashboards |
-| `dev` | jupyter | exploration |
+| `bi` | superset | дашборды |
+| `dev` | jupyter | исследование данных |
 
 ```bash
-docker compose up -d --build                    # core only
-docker compose --profile streaming up -d        # core + CDC
-docker compose --profile orchestration up -d    # core + Airflow/dbt
-docker compose --profile bi up -d               # core + Superset
+docker compose up -d --build                    # только ядро
+docker compose --profile streaming up -d        # ядро + CDC
+docker compose --profile orchestration up -d    # ядро + Airflow/dbt
+docker compose --profile bi up -d               # ядро + Superset
 
-# everything (needs 8+ GB for Docker)
+# всё сразу (нужно 8+ ГБ для Docker)
 docker compose --profile streaming --profile orchestration --profile bi --profile dev up -d
 
 docker compose ps
 ```
 
-## Service URLs
+## Адреса сервисов
 
-| Service | URL | Credentials |
+| Сервис | URL | Доступ |
 | --- | --- | --- |
 | Airflow | http://localhost:8080 | admin / admin |
 | Kafka UI | http://localhost:8082 | — |
 | Kafka Connect (Debezium) REST | http://localhost:8083 | — |
 | MinIO Console | http://localhost:9001 | minio / minio123 |
-| Spark UI (while a job is running) | http://localhost:4040 (second job: 4041) | — |
-| ClickHouse HTTP | http://localhost:8123 | default / (empty) |
-| Superset | http://localhost:8088 | admin / admin (see instructions) |
+| Spark UI (пока задача выполняется) | http://localhost:4040 (вторая задача: 4041) | — |
+| ClickHouse HTTP | http://localhost:8123 | default / (пустой пароль) |
+| Superset | http://localhost:8088 | admin / admin (см. инструкции) |
 | Jupyter | http://localhost:8889 | token: admin |
 
-Step-by-step instructions for running the pipelines, registering the Debezium connector and activating Superset are in [`Training_instruction.md`](Training_instruction.md) and the [`ИНСТРУКЦИИ/`](ИНСТРУКЦИИ/) folder.
+Пошаговые инструкции по запуску пайплайнов, регистрации коннектора Debezium и активации Superset — в [`Training_instruction.md`](Training_instruction.md) и в папке [`ИНСТРУКЦИИ/`](ИНСТРУКЦИИ/).
 
 ---
 
-# Data Flow
+# Поток данных
 
-Step-by-step commands: [`ИНСТРУКЦИИ/запуск пайплайнов.txt`](ИНСТРУКЦИИ/запуск%20пайплайнов.txt).
+Пошаговые команды: [`ИНСТРУКЦИИ/запуск пайплайнов.txt`](ИНСТРУКЦИИ/запуск%20пайплайнов.txt).
 
-## Batch pipeline
+## Пакетная ветка
 
-| Step | Script | Result |
+| Шаг | Скрипт | Результат |
 | --- | --- | --- |
-| Extract | `pg_to_minio.py` | full snapshot of `orders` → `s3a://bucket/batch_output` (Parquet, overwrite) |
-| Load | `minio_to_clickhouse.py` | snapshot → ClickHouse `orders_batch` (TRUNCATE + INSERT) |
+| Извлечение | `pg_to_minio.py` | полный снимок `orders` → `s3a://bucket/batch_output` (Parquet, перезапись) |
+| Загрузка | `minio_to_clickhouse.py` | снимок → ClickHouse `orders_batch` (TRUNCATE + INSERT) |
 
-## CDC pipeline
+## CDC-ветка
 
-| Step | Component | Result |
+| Шаг | Компонент | Результат |
 | --- | --- | --- |
-| Capture | Debezium (`pg-connector.json`) | row changes → topic `pg.public.orders`; `ExtractNewRecordState`, deletes rewritten with `__deleted`, extra fields `__op`, `__lsn`, `__source_ts_ms` |
-| Land | `kafka_to_minio.py` (Structured Streaming) | raw JSON events → `s3a://bucket/kafka_output`, checkpoint in `s3a://bucket/checkpoints/kafka_orders` |
-| Load | `minio_to_clickhouse_kafka.py` | parsed events → `orders_cdc` (`ReplacingMergeTree(version, is_deleted)`, version = LSN) |
-| Serve | ClickHouse view `orders_current` | `FINAL` + `is_deleted = 0` → current state of the source table |
+| Захват | Debezium (`pg-connector.json`) | изменения строк → топик `pg.public.orders`; `ExtractNewRecordState`, удаления переписываются с полем `__deleted`, дополнительные поля `__op`, `__lsn`, `__source_ts_ms` |
+| Приземление | `kafka_to_minio.py` (Structured Streaming) | сырые JSON-события → `s3a://bucket/kafka_output`, checkpoint в `s3a://bucket/checkpoints/kafka_orders` |
+| Загрузка | `minio_to_clickhouse_kafka.py` | разобранные события → `orders_cdc` (`ReplacingMergeTree(version, is_deleted)`, version = LSN) |
+| Выдача | представление ClickHouse `orders_current` | `FINAL` + `is_deleted = 0` → текущее состояние исходной таблицы |
 
-Kafka stores the history of changes, not the current state, and Debezium re-snapshots the table when the connector is re-registered. Versioning by LSN makes the load idempotent: replaying the same events produces the same result.
+Kafka хранит историю изменений, а не текущее состояние, а Debezium заново делает снимок таблицы при повторной регистрации коннектора. Версионирование по LSN делает загрузку идемпотентной: повторное воспроизведение тех же событий даёт тот же результат.
 
 ---
 
-# Data Modeling
+# Моделирование данных
 
-The dbt layer contains staging and mart models.
+Слой dbt состоит из staging-моделей и витрин.
 
 ### Staging
 
 `stg_orders.sql`
 
-The staging layer is responsible for preparing raw source data for analytical transformations.
+Staging-слой готовит сырые данные из источника к аналитическим трансформациям.
 
-Typical responsibilities include:
+Типичные задачи:
 
-* renaming columns
-* type conversion
-* basic cleaning
-* standardization
-* preparing data for downstream models
+* переименование колонок
+* приведение типов
+* базовая очистка
+* стандартизация
+* подготовка данных для следующих моделей
 
-### Mart
+### Витрина (mart)
 
 `mart_daily_sales.sql`
 
-The mart layer contains business-oriented analytical data prepared for reporting.
+Слой витрин содержит бизнес-ориентированные аналитические данные, подготовленные для отчётности.
 
-The general concept is:
+Общая схема:
 
 ```text
-Source data
+Исходные данные
      ↓
 Staging
      ↓
-Business transformations
+Бизнес-трансформации
      ↓
-Analytical Mart
+Аналитическая витрина
      ↓
-BI / Analytics
+BI / аналитика
 ```
 
 ---
 
-# Orchestration
+# Оркестрация
 
-| DAG | Schedule | Tasks |
+| DAG | Расписание | Задачи |
 | --- | --- | --- |
-| `raw_to_mart_pipeline` | daily | `generate_raw_data` → `dbt_run` → `dbt_test` (Postgres raw → staging → mart → data quality tests) |
-| `batch_pg_to_clickhouse` | daily | `pg_to_minio` → `minio_to_clickhouse` |
-| `cdc_minio_to_clickhouse` | hourly | `minio_to_clickhouse_cdc` → `check_current_state` |
+| `raw_to_mart_pipeline` | ежедневно | `generate_raw_data` → `dbt_run` → `dbt_test` (сырые данные Postgres → staging → витрина → тесты качества) |
+| `batch_pg_to_clickhouse` | ежедневно | `pg_to_minio` → `minio_to_clickhouse` |
+| `cdc_minio_to_clickhouse` | ежечасно | `minio_to_clickhouse_cdc` → `check_current_state` |
 
-Tasks run `docker exec` into the `spark`, `dbt` and `clickhouse` containers through the Docker socket mounted into the scheduler. All Spark tasks share the Airflow pool `spark` with a single slot (created in `airflow-init`), so only one Spark driver runs at a time — the stack is sized for an 8 GB laptop. The CDC stream itself (`kafka_to_minio.py`) is a long-running process and is started outside Airflow; the hourly DAG moves the accumulated events into ClickHouse.
-
----
-
-# Why This Project
-
-The project was built as practical Data Engineering training with a focus on understanding how individual components work together as a complete data platform.
-
-The main learning objectives were:
-
-* designing end-to-end data pipelines
-* working with batch and streaming architectures
-* understanding CDC
-* integrating Kafka and Debezium
-* processing data with Spark
-* working with object storage
-* loading data into analytical databases
-* orchestrating workflows with Airflow
-* transforming data using dbt
-* building an analytical layer for BI
+Задачи выполняют `docker exec` в контейнеры `spark`, `dbt` и `clickhouse` через Docker-сокет, подключённый к scheduler. Все Spark-задачи используют общий пул Airflow `spark` с одним слотом (создаётся в `airflow-init`), поэтому одновременно работает только один Spark-драйвер — стек рассчитан на ноутбук с 8 ГБ. Сам CDC-стрим (`kafka_to_minio.py`) — долгоживущий процесс, он запускается вне Airflow; ежечасный DAG переносит накопленные события в ClickHouse.
 
 ---
 
-# Skills Demonstrated
+# Зачем этот проект
+
+Проект создан как практическое обучение Data Engineering с упором на понимание того, как отдельные компоненты работают вместе как единая платформа данных.
+
+Основные учебные цели:
+
+* проектирование сквозных пайплайнов данных
+* работа с пакетной и потоковой архитектурами
+* понимание CDC
+* интеграция Kafka и Debezium
+* обработка данных в Spark
+* работа с объектным хранилищем
+* загрузка данных в аналитические базы
+* оркестрация процессов в Airflow
+* трансформация данных с помощью dbt
+* построение аналитического слоя для BI
+
+---
+
+# Продемонстрированные навыки
 
 ### Data Engineering
 
 * ETL / ELT
-* Batch processing
-* Streaming
+* Пакетная обработка
+* Стриминг
 * CDC
-* Data ingestion
-* Data transformation
-* Data orchestration
-* Data warehousing concepts
-* Data lake concepts
+* Загрузка данных (ingestion)
+* Трансформация данных
+* Оркестрация данных
+* Концепции хранилищ данных (DWH)
+* Концепции data lake
 
-### Technologies
+### Технологии
 
 * Python
 * SQL
@@ -534,24 +532,24 @@ The main learning objectives were:
 * Apache Superset
 * Docker
 
-### Engineering
+### Инженерные практики
 
-* Dockerized development environment
-* Service integration
-* Configuration management
-* Dependency management
+* Среда разработки в Docker
+* Интеграция сервисов
+* Управление конфигурацией
+* Управление зависимостями
 * Git / GitHub
-* Pipeline troubleshooting
+* Диагностика проблем в пайплайнах
 
 ---
 
-# Project Status
+# Статус проекта
 
-The project is designed as a local Docker-based Data Engineering environment.
+Проект задуман как локальная среда Data Engineering на Docker.
 
-Current implementation includes:
+Сейчас реализованы:
 
-* PostgreSQL source database
+* исходная база PostgreSQL
 * Kafka
 * Debezium CDC
 * MinIO
@@ -560,31 +558,31 @@ Current implementation includes:
 * Airflow
 * dbt
 * Superset
-* Batch and streaming pipeline components
+* компоненты пакетного и потокового пайплайнов
 
-All parts were verified end-to-end from a clean clone. Problems met along the way and their fixes are collected in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+Все части проверены от начала до конца на чистом клоне репозитория. Проблемы, встреченные по пути, и их решения собраны в [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-Further improvements can include:
+Возможные улучшения:
 
-* running the CDC stream as a supervised service instead of a manual `spark-submit`
-* dbt models on top of ClickHouse
-* more dbt tests (relationships, source freshness) and data quality checks on the ClickHouse side
-* a multi-node Spark cluster instead of local mode
-* pinned Docker image versions instead of `:latest`
-* incremental dbt models
-* schema evolution handling
-* monitoring and alerting
+* запуск CDC-стрима как управляемого сервиса вместо ручного `spark-submit`
+* модели dbt поверх ClickHouse
+* больше тестов dbt (relationships, source freshness) и проверки качества данных на стороне ClickHouse
+* многоузловой Spark-кластер вместо local mode
+* фиксированные версии Docker-образов вместо `:latest`
+* инкрементальные модели dbt
+* обработка эволюции схемы
+* мониторинг и алерты
 * CI/CD
-* production cloud deployment
-* infrastructure-as-code
-* additional analytical marts
+* развёртывание в облаке
+* инфраструктура как код
+* дополнительные аналитические витрины
 
 ---
 
-## Author
+## Автор
 
 **Kamilla**
 
-Data Engineering portfolio project focused on:
+Портфолио-проект по Data Engineering:
 
 **Python · SQL · Spark · Airflow · Kafka · Debezium · PostgreSQL · ClickHouse · MinIO · dbt · Docker**
